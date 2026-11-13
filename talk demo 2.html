@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تواصل بالصور - نسخة تجريبية</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;background:#f4f1ea;color:#222;min-height:100vh;display:flex;flex-direction:column}
+  #banner{background:#1d3557;color:#fff;text-align:center;font-size:clamp(22px,5vw,40px);padding:16px;min-height:76px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  #grid{flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:12px;padding:12px}
+  @media(min-width:800px){#grid{grid-template-columns:repeat(3,1fr)}}
+  .card{background:#fff;border:6px solid transparent;border-radius:22px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-size:clamp(22px,4.5vw,36px);font-weight:700;padding:14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.12);transition:transform .15s,border-color .15s;min-height:120px}
+  .card .e{font-size:clamp(56px,12vw,110px);line-height:1}
+  .card.focus{border-color:#e63946;transform:scale(1.04);background:#fff7e6}
+  .card.chosen{background:#b7f0c1;border-color:#2a9d8f}
+  #bar{display:flex;gap:10px;padding:10px 12px 16px;flex-wrap:wrap;justify-content:center;background:#e8e3d6}
+  #bar button{flex:1 1 120px;font-size:20px;padding:14px 8px;border:0;border-radius:14px;background:#457b9d;color:#fff;font-weight:700}
+  #bar button.sel{background:#2a9d8f}
+  #bar button.alt{background:#6c757d}
+  #note{font-size:13px;color:#555;text-align:center;padding:0 12px 10px;background:#e8e3d6}
+</style>
+</head>
+<body>
+<div id="banner">اختر بحركة الراس (هنا بالأزرار للتجربة)</div>
+<div id="grid"></div>
+<div id="bar">
+  <button id="bR">↶ ميل يمين</button>
+  <button id="bL">ميل يسار ↷</button>
+  <button id="bN" class="sel">هزّ الراس = اختيار</button>
+  <button id="bA" class="alt">تنقل تلقائي: مطفي</button>
+  <button id="bC" style="background:#e76f51">📷 تشغيل الكاميرا</button>
+  <button id="bS" class="alt">عكس الاتجاه</button>
+</div>
+<div id="cam" style="display:none;text-align:center;background:#e8e3d6;padding:6px">
+  <video id="v" playsinline muted style="width:160px;border-radius:12px;transform:scaleX(-1)"></video>
+  <div id="st" style="font-size:14px"></div>
+</div>
+<div id="note">تجريبي: الأزرار تمثّل حركة الراس. في النسخة الحقيقية الكاميرا هي اللي تقرأ الحركة وكل شي يصير داخل الجهاز. تقدر تستخدم أسهم الكيبورد والمسافة أيضاً.</div>
+
+<script type="module">
+import {FaceLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const V=document.getElementById('v'),ST=document.getElementById('st');
+let lm=null,running=false,flip=1,base=null,calib=[],lastAct=0,armed=true,lastPitch=[];
+document.getElementById('bS').onclick=()=>{flip=-flip;ST.textContent='تم عكس الاتجاه';};
+document.getElementById('bC').onclick=async()=>{
+  if(running)return;
+  document.getElementById('cam').style.display='block';
+  try{
+    ST.textContent='جاري التحميل... (يحتاج إنترنت أول مرة)';
+    const fs=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    lm=await FaceLandmarker.createFromOptions(fs,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+      runningMode:"VIDEO",numFaces:1});
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}});
+    V.srcObject=s;await V.play();running=true;
+    ST.textContent='انظر للكاميرا بشكل مستقيم لثانيتين...';
+    loop();
+  }catch(e){ST.textContent='ما اشتغلت الكاميرا: '+e.message+' — افتح الملف في سفاري واسمح للكاميرا.';}
+};
+function loop(){
+  if(!running)return;
+  const r=lm.detectForVideo(V,performance.now());
+  if(r.faceLandmarks&&r.faceLandmarks.length){
+    const p=r.faceLandmarks[0];
+    const a=p[33],b=p[263],n=p[1],c=p[152];
+    const roll=Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI;
+    const em=(a.y+b.y)/2;
+    const pitch=(n.y-em)/(c.y-em);
+    if(!base){
+      calib.push({roll,pitch});
+      if(calib.length>40){
+        base={roll:calib.reduce((s,x)=>s+x.roll,0)/calib.length,pitch:calib.reduce((s,x)=>s+x.pitch,0)/calib.length};
+        ST.textContent='جاهز: ميل الراس يتنقل، وهزّة لتحت تختار';
+      }
+    }else{
+      const dr=(roll-base.roll)*flip, dp=pitch-base.pitch;
+      const now=performance.now();
+      if(Math.abs(dr)<6&&dp<0.04)armed=true;
+      if(armed&&now-lastAct>900){
+        if(dp>0.10){armed=false;lastAct=now;choose();}
+        else if(dr>14){armed=false;lastAct=now;move(-1);}
+        else if(dr<-14){armed=false;lastAct=now;move(1);}
+      }
+    }
+  }
+  requestAnimationFrame(loop);
+}
+window.move=window.move||null;
+</script>
+<script>
+const items=[
+ {e:"💧",t:"أبغى ماء"},
+ {e:"🍽️",t:"أبغى أكل"},
+ {e:"🚻",t:"أبغى الحمام"},
+ {e:"😣",t:"تعبان"},
+ {e:"🎮",t:"أبغى ألعب"},
+ {e:"❤️",t:"أحبك"}
+];
+const grid=document.getElementById('grid'),banner=document.getElementById('banner');
+let idx=0,auto=false,timer=null,voice=null;
+items.forEach((it,i)=>{
+  const d=document.createElement('div');d.className='card';
+  d.innerHTML='<div class="e">'+it.e+'</div><div>'+it.t+'</div>';
+  d.onclick=()=>{idx=i;render();choose();};
+  grid.appendChild(d);
+});
+function render(){[...grid.children].forEach((c,i)=>c.classList.toggle('focus',i===idx));}
+function pickVoice(){
+  const v=speechSynthesis.getVoices();
+  voice=v.find(x=>x.lang&&x.lang.toLowerCase().startsWith('ar'))||null;
+}
+if('speechSynthesis' in window){pickVoice();speechSynthesis.onvoiceschanged=pickVoice;}
+function say(text){
+  banner.textContent=text;
+  if(!('speechSynthesis' in window))return;
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text);
+  u.lang='ar-SA';if(voice)u.voice=voice;u.rate=.9;
+  speechSynthesis.speak(u);
+}
+function move(dir){idx=(idx+dir+items.length)%items.length;render();}
+function choose(){
+  const c=grid.children[idx];
+  c.classList.add('chosen');setTimeout(()=>c.classList.remove('chosen'),1500);
+  say(items[idx].t);
+}
+bR.onclick=()=>move(-1);   // RTL: يمين = السابق بصرياً
+bL.onclick=()=>move(1);
+bN.onclick=choose;
+bA.onclick=()=>{
+  auto=!auto;
+  bA.textContent='تنقل تلقائي: '+(auto?'شغّال':'مطفي');
+  clearInterval(timer);
+  if(auto)timer=setInterval(()=>move(1),2500);
+};
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight')move(-1);
+  else if(e.key==='ArrowLeft')move(1);
+  else if(e.key===' '||e.key==='Enter'||e.key==='ArrowDown'){e.preventDefault();choose();}
+});
+render();
+</script>
+</body>
+</html>
